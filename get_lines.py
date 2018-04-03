@@ -2,18 +2,7 @@
 import cv2
 import sys
 import numpy
-
-# Convert polar representation of a line to pair of points
-def convertRhoThetaToCoordinates(rho, theta):
-    a = numpy.cos(theta)
-    b = numpy.sin(theta)
-    x0 = a*rho
-    y0 = b*rho
-    x1 = int(x0 + 1000 * (-b))
-    y1 = int(y0 + 1000 * (a))
-    x2 = int(x0 - 1000 * (-b))
-    y2 = int(y0 - 1000 * (a))
-    return ((x1, y1), (x2, y2))
+import utils
 
 # read the image from the file
 if len(sys.argv) < 2:
@@ -42,7 +31,7 @@ for lineArr in lines:
     for line in lineArr:
         rho, theta = line
         # draw the line by converting polar representations to pair of points
-        (p1, p2) = convertRhoThetaToCoordinates(rho, theta)
+        (p1, p2) = utils.convertRhoThetaToCoordinates(rho, theta)
         cv2.line(frame, p1, p2, (0, 255, 0), 2)
 
 cv2.imshow("Resulting frame", frame)
