@@ -24,6 +24,7 @@ objp[:,:2] = np.mgrid[0:7,0:5].T.reshape(-1,2)
 objpoints = []
 imgpoints = []
 imgSize = None
+frameCount = 0
 
 # while the camera is open,
 while video_capture.isOpened():
@@ -31,6 +32,9 @@ while video_capture.isOpened():
     # stop if we can't read a frame from the video e.g. its finished
     if ret is False:
         break
+    frameCount += 1
+    if frameCount % 50 != 1:
+        continue
 
     # convert the image to gray
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
