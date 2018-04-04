@@ -9,9 +9,7 @@ if len(sys.argv) < 2:
 
 # read the image from the given file
 image_file = sys.argv[1]
-frameRaw = cv2.imread(image_file)
-# resize so it fits to landscape hd
-frame = cv2.resize(frameRaw, (1280, 720))
+frame = cv2.imread(image_file)
 
 # if couldn't find the frame, stop the program
 if frame is None:

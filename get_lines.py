@@ -10,9 +10,7 @@ if len(sys.argv) < 2:
     sys.exit(-1)
 
 image_file = sys.argv[1]
-frameRaw = cv2.imread(image_file)
-# resize to landscape hd
-frame = cv2.resize(frameRaw, (1280, 720))
+frame = cv2.imread(image_file)
 
 # exit if no frame has been found
 if frame is None:
