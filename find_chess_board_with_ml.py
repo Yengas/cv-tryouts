@@ -53,52 +53,60 @@ def cluster_points (points, cluster_dist=7):
 
     return new_points
 
-parser = utils.createArgumentParserWithImage('Finds a chessboard from the given image.')
-parser.add_argument(
-    '--classifier',
-    default='./data/corner-classifier-rf.pkl',
-    help='Path to the corner_classifier to be used while eleminating sift descriptors.'
-)
-args = parser.parse_args()
+def findChessBoardCorners(corner_classifier, grayImage, image):
+    hc = cv2.cornerHarris(grayImage, 2, 3, 0.04)
 
-image_path = args.image_path
-corner_classifier = joblib.load(args.classifier)
-image = cv2.imread(image_path)
+    dst = cv2.dilate(hc,None)
+    dst = dst > (0.02 * dst.max())
+    width, height = dst.shape[1::-1]
+    points = []
 
-if image is None:
-    print("Couldn't read the given image file.")
-    sys.exit(-1)
+    for i in range(0, height):
+        for j in range(0, width):
+            if dst[i][j]:
+                points.append((j, i))
+    points = cluster_points(points)
+    sfd = cv2.xfeatures2d.SIFT_create()
+    _, sd = sfd.compute(image, points)
 
-gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-hc = cv2.cornerHarris(gray, 2, 3, 0.04)
-print(hc)
-#hc_kps = hc.detect(image)
+    predictions = corner_classifier.predict(sd)
+    # there are no chessboard corners predicted because the keypoints decided HarrisLaplaceFeatureDetector doesn't land on
+    # the chessboard.
+    idx = (predictions == 1)
+    kps = []
+    desc = []
+    for i in range(0, len(idx)):
+        if idx[i] == 1:
+            kps.append(points[i])
+            desc.append(sd[i])
+    return kps, np.array(desc)
 
-#cv2.drawKeypoints(image, hc_kps, out)
+def main():
+    parser = utils.createArgumentParserWithImage('Finds a chessboard from the given image.')
+    parser.add_argument(
+        '--classifier',
+        default='./data/corner-classifier-rf.pkl',
+        help='Path to the corner_classifier to be used while eleminating sift descriptors.'
+    )
+    args = parser.parse_args()
 
-#result is dilated for marking the corners, not important
-dst = cv2.dilate(hc,None)
-dst = dst > (0.02 * dst.max())
-width, height = dst.shape[1::-1]
-points = []
+    image_path = args.image_path
+    corner_classifier = joblib.load(args.classifier)
+    image = cv2.imread(image_path)
 
-for i in range(0, height):
-    for j in range(0, width):
-        if dst[i][j]:
-            points.append((j, i))
-points = cluster_points(points)
-sfd = cv2.xfeatures2d.SIFT_create()
-sd = sfd.compute(image, points)[1]
+    if image is None:
+        print("Couldn't read the given image file.")
+        sys.exit(-1)
 
-predictions = corner_classifier.predict(sd)
-# there are no chessboard corners predicted because the keypoints decided HarrisLaplaceFeatureDetector doesn't land on
-# the chessboard.
-idx = (predictions == 1)
-chessboard_corners = [c for c, i in zip(points, idx) if i == 1]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    chessboard_corners, _ = findChessBoardCorners(corner_classifier, gray, image)
 
-out = image.copy()
-cv2.drawKeypoints(image, chessboard_corners, out)
+    out = image.copy()
+    cv2.drawKeypoints(image, chessboard_corners, out)
 
-cv2.imshow('result', out)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    cv2.imshow('result', out)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    main()
