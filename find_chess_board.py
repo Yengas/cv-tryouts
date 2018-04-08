@@ -4,17 +4,6 @@ import cv2
 import numpy as np
 import utils
 
-PROGRAM_DESC = 'Finds the chessboard in the given image, with opencv findchessboard function'
-
-parser = utils.createArgumentParserWithImage(PROGRAM_DESC)
-args = parser.parse_args()
-
-image = cv2.imread(args.image_path)
-
-if image is None:
-    print("Couldn't read image from the given file.")
-    sys.exit(-1)
-
 # given the internal corners found, extends it to find all the corners
 def calculateAllBoardCorners(corners, patternSize):
     rows, columns = patternSize
@@ -52,8 +41,8 @@ def calculateAllBoardCorners(corners, patternSize):
                     'check': lambda i, j: j < columns - 1 and i < rows - 1,
                     'target': cornerIndex + columns + 1,
                     'calculate': lambda current, get, i, j:
-                        current + ((current - get(cornerIndex - columns)) if i > 0 else (get(cornerIndex + columns) - current))
-                            + ((get(cornerIndex + 1) - current) if j < columns - 1 else (current - get(cornerIndex - 1)))
+                    current + ((current - get(cornerIndex - columns)) if i > 0 else (get(cornerIndex + columns) - current))
+                    + ((get(cornerIndex + 1) - current) if j < columns - 1 else (current - get(cornerIndex - 1)))
                 }
             ]
 
@@ -128,33 +117,52 @@ def getBoardHomography(allCorners, patternSize, boardSize):
     #objPoints = [(0, 0), (640, 0), (640, 640), (0, 640)]
     #return cv2.findHomography(np.array(imgPoints, dtype=np.float32), np.array(objPoints, dtype=np.float32))
 
-patternSize = (7, 7)
-criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-searchWindow = (5, 5)
-zeroZone = (-1, -1)
+def findChessboardPlacement(
+        image, pattern_size, board_size, gray=None,
+        find_chessboard_flags = cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE | cv2.CALIB_CB_FILTER_QUADS,
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001),
+        search_window = (5, 5), zero_zone = (-1, -1)
+):
+    # make the image gray
+    gray = gray.copy() if gray is not None else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # apply clahe for contrast limiting, reflection removing
+    clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(11,11))
+    cl = clahe.apply(gray)
 
-# make the image gray
-gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-# apply clahe for contrast limiting, reflection removing
-clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(11,11))
-cl = clahe.apply(gray)
+    # find the chessboard on the clahe applied image
+    found, corners = cv2.findChessboardCorners(cl, pattern_size)
 
-# find the chessboard on the clahe applied image
-found, corners = cv2.findChessboardCorners(cl, patternSize)
+    if found is False:
+        return False, None, None
+    # locate the sub pixel accurate corners on the gray image
+    corners = cv2.cornerSubPix(gray, corners, search_window, zero_zone, criteria)
+    # derive all the corners of the board, given the inner corners
+    corners = calculateAllBoardCorners(corners, pattern_size)
+    # get board homography
+    homography, _ = getBoardHomography(corners, pattern_size, board_size)
 
-if found is False:
-    print("Found no complete corners, sorry!")
-    sys.exit(-1)
+    return True, homography, corners
 
-# locate the sub pixel accurate corners on the gray image
-corner = cv2.cornerSubPix(gray, corners, searchWindow, zeroZone, criteria)
-# derive all the corners of the board, given the inner corners
-corners = calculateAllBoardCorners(corner, patternSize)
-# get board homography
-homography, _ = getBoardHomography(corners, patternSize, (640, 640))
-out = cv2.warpPerspective(image, homography, (640, 640))
+if __name__ == '__main__':
+    PROGRAM_DESC = 'Finds the chessboard in the given image, with opencv findchessboard function'
 
-cv2.imshow('original', image)
-cv2.imshow('result', out)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    parser = utils.createArgumentParserWithImage(PROGRAM_DESC)
+    args = parser.parse_args()
+
+    image = cv2.imread(args.image_path)
+
+    if image is None:
+        print("Couldn't read image from the given file.")
+        sys.exit(-1)
+
+    pattern_size, board_size = (7, 7), (640, 640)
+    found, homography, corners = findChessboardPlacement(image, pattern_size, board_size)
+    if found is False:
+        print("Found no complete corners, sorry!")
+        sys.exit(-1)
+
+    out = cv2.warpPerspective(image, homography, board_size)
+    cv2.imshow('original', image)
+    cv2.imshow('result', out)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()

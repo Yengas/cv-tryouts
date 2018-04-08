@@ -4,6 +4,7 @@ import argparse
 import cv2
 from math import atan2, cos, sin
 import numpy as np
+from find_chess_board import findChessboardPlacement
 
 # this class is based on the code of Nghia Ho who first coded it for video files
 # and the code of chen jia who added kalman filter for live features.
@@ -102,11 +103,27 @@ if __name__ == '__main__':
         sys.exit(-1)
 
     videostab = VideoStab(prev, (width, height))
+    pattern_size, board_size = (7, 7), (640, 640)
+    last_homography, last_corners = None, None
+    frame = 0
+
     while video.isOpened():
         ret, cur = video.read()
         if ret is False:
             break
         result = videostab.process(cur)
 
-        cv2.imshow('result', result)
+        if frame % 20 == 0:
+            found, homography, corners = findChessboardPlacement(result, pattern_size, board_size, None, cv2.CALIB_CB_FAST_CHECK)
+
+            if found:
+                last_homography = homography
+                last_corners = corners
+
+        if last_homography is not None:
+            board = cv2.warpPerspective(result, last_homography, board_size)
+            cv2.imshow('board', board)
+
+        cv2.imshow('camera', result)
         cv2.waitKey(1)
+        frame += 1
