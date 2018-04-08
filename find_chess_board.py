@@ -1,15 +1,12 @@
 #!/usr/bin/python3.5
 import sys
 import cv2
-import pickle
 import numpy as np
 import utils
-from BoardPlacement import BoardPlacement
 
 PROGRAM_DESC = 'Finds the chessboard in the given image, with opencv findchessboard function'
 
 parser = utils.createArgumentParserWithImage(PROGRAM_DESC)
-parser.add_argument('output_path', help='Where to put the found chessboard placement info as pickle dump.')
 args = parser.parse_args()
 
 image = cv2.imread(args.image_path)
@@ -156,10 +153,6 @@ corners = calculateAllBoardCorners(corner, patternSize)
 # get board homography
 homography, _ = getBoardHomography(corners, patternSize, (640, 640))
 out = cv2.warpPerspective(image, homography, (640, 640))
-
-print('Pickle dumping the found frame to `%s`' % (args.output_path))
-bp = BoardPlacement(image, corners, homography, out)
-pickle.dump(bp, open(args.output_path, 'wb'))
 
 cv2.imshow('original', image)
 cv2.imshow('result', out)
