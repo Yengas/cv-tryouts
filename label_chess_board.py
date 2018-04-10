@@ -2,8 +2,11 @@
 import argparse
 import cv2
 from enum import Enum
-import sys
 import numpy as np
+from os.path import join
+import pickle
+import sys
+import uuid
 
 class PieceType(Enum):
     King = 0
@@ -21,6 +24,19 @@ class SquareColor(Enum):
     White = 0
     Black = 1
 
+class ClickTargetType(Enum):
+    Chessboard = 0
+    PieceSelection = 1
+    Nothing = 2
+
+class BoardStatus(Enum):
+    # the board is idle and everything is valid
+    Valid = 0
+    # the board is not seen, there is another problem etc.
+    Invalid = 1
+    # wether there is a hand that makes a move on the image etc.
+    InProgress = 2
+
 class Piece:
     def __init__(self, color, type):
         self.color = color
@@ -33,9 +49,10 @@ class Square:
         self.piece = piece
 
 class Chessboard:
-    def __init__(self, size):
+    def __init__(self, size, status = BoardStatus.Valid):
         self.rows, self.columns = size
         self.squares = []
+        self.status = status
 
         for r in range(0, 8):
             square_color = SquareColor.Black if r % 2 == 0 else SquareColor.White
@@ -50,6 +67,9 @@ class Chessboard:
 
     def setPiece(self, r, c, piece):
         self.squares[r][c].piece = piece
+
+    def setStatus(self, status):
+        self.status = status
 
 class PieceAtlas:
     def __init__(self, image, white_first = True, order=None):
@@ -91,7 +111,7 @@ def drawChessboard(
     rows, columns = len(chessboard.squares), max(map(len, chessboard.squares))
     square_width, square_height = int(width / columns), int(height / rows)
 
-    # draw each sqare
+    # draw each square
     for i in range(0, rows):
         for j in range(0, columns):
             square = chessboard.squares[i][j]
@@ -104,14 +124,18 @@ def drawChessboard(
 
             frame[y:y+square_height, x:x+square_width] = bg_color
             if square.piece is not None:
-                piece_image = piece_atlas.get_piece_image(square.piece)
+                piece_image = piece_atlas.get_piece_image(square.piece).copy()
                 piece_image = changeTransparentColorsTo(piece_image, bg_color)
 
                 p_width, p_height = piece_image.shape[1::-1]
                 p_p_left, p_p_up = int((square_width - p_width) / 2), int((square_height - p_height) / 2)
-                frame[y+p_p_up:y+p_p_up+p_height, x+p_p_left:x+p_p_left+p_width] |= piece_image
+                frame[y+p_p_up:y+p_p_up+p_height, x+p_p_left:x+p_p_left+p_width] = piece_image
 
-    return frame
+    def cb_resolver(x, y):
+        i, j = int((height - y) / square_height), int(x / square_width)
+        return (i, j)
+
+    return frame, cb_resolver
 
 def drawPieceSelection(
         piece_atlas, selected_piece = (-1, -1), piece_sizes=(55, 55),
@@ -131,19 +155,27 @@ def drawPieceSelection(
             row, column = int(index / piece_per_line), int(index % piece_per_line)
             x, y = column * (piece_width + padding_right), row * (piece_height + padding_up)
 
-            piece_image = piece_atlas.get_piece_image(Piece(color, type))
+            piece_image = piece_atlas.get_piece_image(Piece(color, type)).copy()
             p_width, p_height = piece_image.shape[1::-1]
             p_p_left, p_p_up = int((piece_width - p_width) / 2), int((piece_height - p_height) / 2)
 
-            isSelected = i == selected_piece[0] and j == selected_piece[1]
+            isSelected = row == selected_piece[0] and column == selected_piece[1]
             bg_color = selected_color if isSelected else background_color
 
             frame[y:y+piece_height, x:x+piece_width] = bg_color
             piece_image = changeTransparentColorsTo(piece_image, bg_color)
             frame[y+p_p_up:y+piece_height-p_p_up, x+p_p_left:x+piece_width-p_p_left] = piece_image
 
-    return frame
+    def ps_resolver(x, y):
+        column = int(x / (piece_width + padding_right))
+        row = int(y / (piece_height + padding_up))
+        index = (row * piece_per_line) + column
+        color = PieceColor(int(index / len(PieceType)))
+        type = PieceType(index % len(PieceType))
 
+        return ((row, column), color, type)
+
+    return frame, ps_resolver
 
 def redrawGUI(
         chessboard,
@@ -153,25 +185,76 @@ def redrawGUI(
         board_right_padding = 50, pieces_padding=(10, 10),
         piece_per_line=3
 ):
-    chessboard_frame = drawChessboard(chessboard, piece_atlas, board_size, selected_square)
-    piece_selection_frame = drawPieceSelection(piece_atlas, selected_piece, piece_sizes, pieces_padding, piece_per_line)
+    chessboard_frame, cb_resolver = drawChessboard(chessboard, piece_atlas, board_size, selected_square)
+    piece_selection_frame, ps_resolver = \
+        drawPieceSelection(piece_atlas, selected_piece, piece_sizes, pieces_padding, piece_per_line)
 
     cb_width, cb_height = chessboard_frame.shape[1::-1]
     ps_width, ps_height = piece_selection_frame.shape[1::-1]
+    ps_start_x, ps_start_y = cb_width + board_right_padding, 0
 
     frame = np.zeros((max(cb_height, ps_height), cb_width + board_right_padding + ps_width, 4), dtype=np.uint8)
 
     frame[0:cb_height, 0:cb_width] = chessboard_frame
-    frame[0:ps_height, cb_width + board_right_padding:cb_width+board_right_padding+ps_width] = piece_selection_frame
+    frame[ps_start_y:ps_start_y+ps_height, ps_start_x:ps_start_x+ps_width] = piece_selection_frame
 
-    return frame
+    # Draw right of the board, below the piece selection
+    text_start_x, text_start_y = ps_start_x, ps_start_y + ps_height + 50
+    cv2.putText(frame, 'Board Status', (text_start_x, text_start_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255, 255))
+    cv2.putText(frame, str(chessboard.status), (text_start_x, text_start_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255, 255))
+
+
+    def mouse_click_resolver(x, y):
+        if 0 <= x <= cb_width and 0 <= y <= cb_height:
+            return ClickTargetType.Chessboard, cb_resolver(x, y)
+        if ps_start_x <= x <= ps_start_x + ps_width and ps_start_y <= y <= ps_start_y + ps_height:
+            return ClickTargetType.PieceSelection, ps_resolver(x - ps_start_x, y - ps_start_y)
+
+        return ClickTargetType.Nothing, ()
+
+    return frame, mouse_click_resolver
+
+piece_selected_rc, piece_selected = (-1, -1), None
+
+def create_click_listener(chessboard, resolver):
+    def click_listener(event, x, y, flags, param):
+        global piece_selected_rc, piece_selected
+        if event == cv2.EVENT_LBUTTONDOWN:
+            type, data = resolver(x, y)
+
+            if type == ClickTargetType.PieceSelection:
+                piece_selected_rc = data[0]
+                piece_selected = Piece(data[1], data[2])
+
+            if type == ClickTargetType.Chessboard:
+                i, j = data
+                square = chessboard.squares[i][j]
+                print(square.color, square.notation, square.piece, piece_selected)
+                if square.piece == None and piece_selected is not None:
+                    chessboard.setPiece(i, j, piece_selected)
+                else:
+                    chessboard.setPiece(i, j, None)
+
+    return click_listener
+
+def persist_label(frame, chessboard, output_path):
+    persist_name = str(uuid.uuid4())
+    file_path = join(output_path, persist_name)
+
+    cv2.imwrite(file_path + '.jpg', frame)
+    pickle.dump(chessboard, open(file_path + '.obj', 'wb'))
+    return persist_name
+
 
 if __name__ == '__main__':
+    BOARD_LABELING_WINDOW_NAME = 'Board Labeling'
+    CURRENT_FRAME_WINDOW_NAME = 'Current Frame'
     parser = argparse.ArgumentParser(
         description='Given a video extracts the chessboard'
     )
     parser.add_argument('video_path', help='video file to label the chessboard from')
     parser.add_argument('piece_atlas_path', help='the atlas to read piece images from.')
+    parser.add_argument('output_path', help='where to save the board and its label.')
     args = parser.parse_args()
 
     video = cv2.VideoCapture(args.video_path)# change to (0) for camera
@@ -186,23 +269,39 @@ if __name__ == '__main__':
         sys.exit(-1)
 
     piece_atlas = PieceAtlas(piece_atlas_image)
-    order = [
-        PieceType.King, PieceType.Queen, PieceType.Bishop,
-        PieceType.Knight, PieceType.Rook, PieceType.Pawn
-    ]
-
     chessboard = Chessboard((8, 8))
+    last_frame = None
 
-    chessboard.setPiece(0, 1, Piece(PieceColor.White, PieceType.Bishop))
+    # frame skipping keys, increments in the power of tens
+    frame_skip_keys = list(map(ord, ['q', 'w', 'e']))
 
-    cv2.imshow('result', redrawGUI(chessboard, piece_atlas, (0, 1)))
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-    sys.exit(-1)
-    for i in range(0, 2):
-        color = PieceColor.White if i == 0 else PieceColor.Black
-        for type in order:
-            cv2.imshow('piece', piece_atlas.get_piece_image(Piece(color, type)))
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
+    while True:
+        gui, resolver = redrawGUI(chessboard, piece_atlas, piece_selected_rc)
+        if last_frame is None:
+            ret, last_frame = video.read()
+            if ret is False:
+                break
+        frame = last_frame
+
+        cv2.namedWindow(BOARD_LABELING_WINDOW_NAME)
+        cv2.setMouseCallback(BOARD_LABELING_WINDOW_NAME, create_click_listener(chessboard, resolver))
+        cv2.imshow(BOARD_LABELING_WINDOW_NAME, gui)
+        cv2.imshow(CURRENT_FRAME_WINDOW_NAME, frame)
+        key = cv2.waitKey(100) & 0xff
+
+        if key == ord('s'):
+            persist_name = persist_label(frame, chessboard, args.output_path)
+            print('Persisted labeled frame. Name: `%s`' % (persist_name))
+        if key == ord('c'):
+            newStatus = BoardStatus((chessboard.status.value + 1) % len(BoardStatus))
+            chessboard.setStatus(newStatus)
+        elif key in frame_skip_keys:
+            index = frame_skip_keys.index(key)
+            frame_increment_count = 10**index
+
+            for i in range(0, frame_increment_count):
+                video.grab()
+            last_frame = None
+        elif key == 27:
+            break
 
