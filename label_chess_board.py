@@ -8,6 +8,9 @@ import pickle
 import sys
 import uuid
 
+from find_chess_board import findChessboardPlacement
+
+
 class PieceType(Enum):
     King = 0
     Queen = 1
@@ -229,7 +232,6 @@ def create_click_listener(chessboard, resolver):
             if type == ClickTargetType.Chessboard:
                 i, j = data
                 square = chessboard.squares[i][j]
-                print(square.color, square.notation, square.piece, piece_selected)
                 if square.piece == None and piece_selected is not None:
                     chessboard.setPiece(i, j, piece_selected)
                 else:
@@ -249,12 +251,14 @@ def persist_label(frame, chessboard, output_path):
 if __name__ == '__main__':
     BOARD_LABELING_WINDOW_NAME = 'Board Labeling'
     CURRENT_FRAME_WINDOW_NAME = 'Current Frame'
+    CURRENT_BOARD_WINDOW_NAME = 'Currernt Frame Board'
     parser = argparse.ArgumentParser(
         description='Given a video extracts the chessboard'
     )
     parser.add_argument('video_path', help='video file to label the chessboard from')
     parser.add_argument('piece_atlas_path', help='the atlas to read piece images from.')
     parser.add_argument('output_path', help='where to save the board and its label.')
+    parser.add_argument('--cf', help='whether to show the current frame or not.', default=False, action='store_true')
     args = parser.parse_args()
 
     video = cv2.VideoCapture(args.video_path)# change to (0) for camera
@@ -270,7 +274,32 @@ if __name__ == '__main__':
 
     piece_atlas = PieceAtlas(piece_atlas_image)
     chessboard = Chessboard((8, 8))
-    last_frame = None
+    last_frame, last_board = None, None
+
+    pattern_size, board_size = (7, 7), (640, 640)
+    last_homography, last_corners = None, None
+
+    print('Press y when you find a homography that works. To skip, press any other key.')
+    # lets first find the homography
+    while True:
+        ret, frame = video.read()
+        if ret is False:
+            break
+        found, homography, corners = findChessboardPlacement(frame, pattern_size, board_size, None, cv2.CALIB_CB_FAST_CHECK)
+        if found:
+            board = cv2.warpPerspective(frame, homography, board_size)
+            cv2.imshow('homography result', board)
+            key = cv2.waitKey(24) & 0xff
+
+            if key == ord('y'):
+                last_homography, last_corners = homography, corners
+                break
+
+    cv2.destroyAllWindows()
+    if last_homography is None:
+        print('Could not found the last camera homography.')
+        sys.exit(-1)
+    print('Found and set homography successfully!')
 
     # frame skipping keys, increments in the power of tens
     frame_skip_keys = list(map(ord, ['q', 'w', 'e']))
@@ -281,16 +310,19 @@ if __name__ == '__main__':
             ret, last_frame = video.read()
             if ret is False:
                 break
-        frame = last_frame
+            last_board = cv2.warpPerspective(last_frame, last_homography, board_size)
+        frame, board = last_frame, last_board
 
         cv2.namedWindow(BOARD_LABELING_WINDOW_NAME)
         cv2.setMouseCallback(BOARD_LABELING_WINDOW_NAME, create_click_listener(chessboard, resolver))
         cv2.imshow(BOARD_LABELING_WINDOW_NAME, gui)
-        cv2.imshow(CURRENT_FRAME_WINDOW_NAME, frame)
+        cv2.imshow(CURRENT_BOARD_WINDOW_NAME, board)
+        if args.cf:
+            cv2.imshow(CURRENT_FRAME_WINDOW_NAME, frame)
         key = cv2.waitKey(100) & 0xff
 
         if key == ord('s'):
-            persist_name = persist_label(frame, chessboard, args.output_path)
+            persist_name = persist_label(board, chessboard, args.output_path)
             print('Persisted labeled frame. Name: `%s`' % (persist_name))
         if key == ord('c'):
             newStatus = BoardStatus((chessboard.status.value + 1) % len(BoardStatus))
