@@ -247,6 +247,13 @@ def persist_label(frame, chessboard, output_path):
     pickle.dump(chessboard, open(file_path + '.obj', 'wb'))
     return persist_name
 
+# Rotates the given homography from the origin point
+def getRotatedHomography(homography, size, angle):
+    width, height = size
+    rotation = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1)
+    rotationHomography = np.concatenate((rotation, np.array([[0, 0, 1]])))
+    return np.dot(rotationHomography, homography)
+
 
 if __name__ == '__main__':
     BOARD_LABELING_WINDOW_NAME = 'Board Labeling'
@@ -324,9 +331,12 @@ if __name__ == '__main__':
         if key == ord('s'):
             persist_name = persist_label(board, chessboard, args.output_path)
             print('Persisted labeled frame. Name: `%s`' % (persist_name))
-        if key == ord('c'):
+        elif key == ord('c'):
             newStatus = BoardStatus((chessboard.status.value + 1) % len(BoardStatus))
             chessboard.setStatus(newStatus)
+        elif key == ord('r'):
+            last_homography = getRotatedHomography(last_homography, board_size, 90)
+            last_board = cv2.warpPerspective(last_frame, last_homography, board_size)
         elif key in frame_skip_keys:
             index = frame_skip_keys.index(key)
             frame_increment_count = 10**index
